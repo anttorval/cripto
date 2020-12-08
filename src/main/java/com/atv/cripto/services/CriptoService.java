@@ -4,13 +4,17 @@ import org.apache.poi.hssf.usermodel.HSSFWorkbook;
 import org.apache.poi.ss.usermodel.Row;
 import org.apache.poi.ss.usermodel.Sheet;
 import org.apache.poi.ss.usermodel.Workbook;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.web.reactive.function.client.WebClient;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
+import java.io.File;
 import java.io.FileInputStream;
+import java.io.FileOutputStream;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -18,29 +22,31 @@ import java.nio.file.Paths;
 import java.text.ParseException;
 import java.text.SimpleDateFormat;
 import java.util.Date;
-import java.util.HashMap;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
 import java.util.stream.Stream;
 
 @Service
 public class CriptoService {
 
+    Logger logger = LoggerFactory.getLogger(CriptoService.class);
+
     private final WebClient webClient;
 
-@Autowired
+    @Autowired
     public CriptoService(WebClient.Builder webClientBuilder) {
         this.webClient = webClientBuilder.baseUrl("https://api.exchangeratesapi.io").build();
     }
 
-    private Mono<Map> callExchangeRestApi(String date){
-        return this.webClient.get().uri("/"+date).retrieve().bodyToMono(Map.class);
+    private Mono<Map> callExchangeRestApi(String date) {
+        return this.webClient.get().uri("/" + date).retrieve().bodyToMono(Map.class);
     }
 
     public Flux<Map> processFiles() throws IOException {
-    this.readExcelFile();
+        this.readExcelFile();
 
-    return Flux.empty();
+        return Flux.empty();
     }
 
     private void readExcelFile() throws IOException {
@@ -56,51 +62,47 @@ public class CriptoService {
     private void processFile(Path path) {
         try {
             FileInputStream file = new FileInputStream(path.toFile());
-            Workbook workbook  = new HSSFWorkbook(file);
+            Workbook workbook = new HSSFWorkbook(file);
             Sheet sheet = workbook.getSheetAt(0);
 
-            Map<String, Map<String,Object>> rowsMap = new HashMap<>();
             for (Row row : sheet) {
-                if(row.getRowNum() != 0){
-                        Map<String, Object> mapValue = new HashMap<>();
-                        mapValue.put("fecha", row.getCell(0).getStringCellValue());
-                        mapValue.put("costeDolares", row.getCell(1).getNumericCellValue());
-                        mapValue.put("costeEuros", row.getCell(2).getNumericCellValue());
-                        mapValue.put("costeEth", row.getCell(3).getNumericCellValue());
-                        mapValue.put("costeBtc", row.getCell(4).getNumericCellValue());
+                if (row.getRowNum() != 0) {
+                    String dateRow = row.getCell(0).getStringCellValue();
+                    Double costDollarsRow = row.getCell(1).getNumericCellValue();
+                    Double costEurosRow = Objects.nonNull(row.getCell(2)) ? row.getCell(2).getNumericCellValue() : null;
 
-                        rowsMap.put("row_"+row.getRowNum(), mapValue);
+                    if (Objects.isNull(costEurosRow)) {
+                        row.createCell(2).setCellValue(this.calculateEurosColumn(costDollarsRow, dateRow));
+                    } else if (costEurosRow.equals(Double.valueOf("0.0"))) {
+                        row.getCell(2).setCellValue(this.calculateEurosColumn(costDollarsRow, dateRow));
+                    }
                 }
             }
-            
-            this.calculateEurosColumn(rowsMap);
+            File editedFile = new File(path.toString());
+            FileOutputStream outputStream = new FileOutputStream(editedFile);
+            workbook.write(outputStream);
         } catch (Exception e) {
-            e.printStackTrace();
+            logger.error(e.getMessage());
         }
-
     }
 
-    private void calculateEurosColumn(Map<String, Map<String, Object>> rowsMap) {
-        rowsMap.entrySet().stream().forEach(row -> {
-            if(row.getValue().get("costeEuros").equals(Double.valueOf("0.0"))){
-                String date = this.formatDate((String) row.getValue().get("fecha"));
-                Mono<Map> apiResult = this.callExchangeRestApi(date);
-                Double USDPrice = (Double) ((Map)apiResult.block().get("rates")).get("USD");
-                row.getValue().put("costeEuros",this.calculateEurosFromUSD((Double) row.getValue().get("costeDolares"), USDPrice));
-            }
-        });
+    private Double calculateEurosColumn(Double costDollarsRow, String dateRow) {
+        String date = this.formatDate(dateRow);
+        Mono<Map> apiResult = this.callExchangeRestApi(date);
+        Double USDPrice = (Double) ((Map) apiResult.block().get("rates")).get("USD");
+        return this.calculateEurosFromUSD(costDollarsRow, USDPrice);
     }
 
-    private Double calculateEurosFromUSD(Double costeDolares, Double usdPrice) {
-        return costeDolares/usdPrice;
+    private Double calculateEurosFromUSD(Double costDollars, Double usdPrice) {
+        return costDollars / usdPrice;
     }
 
     private String formatDate(String dateString) {
         try {
             Date date = new SimpleDateFormat("MMMM dd, yyyy", Locale.ENGLISH).parse(dateString);
             return new SimpleDateFormat("yyyy-MM-dd", Locale.ENGLISH).format(date);
-        }catch (ParseException e){
-            e.printStackTrace();
+        } catch (ParseException e) {
+            logger.error(e.getMessage());
         }
         return null;
 
