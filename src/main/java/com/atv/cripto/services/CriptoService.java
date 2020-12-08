@@ -1,9 +1,11 @@
 package com.atv.cripto.services;
 
 import org.apache.poi.hssf.usermodel.HSSFWorkbook;
+import org.apache.poi.ss.usermodel.CellType;
 import org.apache.poi.ss.usermodel.Row;
 import org.apache.poi.ss.usermodel.Sheet;
 import org.apache.poi.ss.usermodel.Workbook;
+import org.apache.poi.xssf.usermodel.XSSFWorkbook;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -36,11 +38,11 @@ public class CriptoService {
 
     @Autowired
     public CriptoService(WebClient.Builder webClientBuilder) {
-        this.webClient = webClientBuilder.baseUrl("https://api.exchangeratesapi.io").build();
+        this.webClient = webClientBuilder.baseUrl("").build();
     }
 
     private Mono<Map> callExchangeRestApi(String date) {
-        return this.webClient.get().uri("/" + date).retrieve().bodyToMono(Map.class);
+        return this.webClient.get().uri("https://api.exchangeratesapi.io/" + date).retrieve().bodyToMono(Map.class);
     }
 
     public Flux<Map> processFiles() throws IOException {
@@ -50,7 +52,7 @@ public class CriptoService {
     }
 
     private void readExcelFile() throws IOException {
-        String pathName = "C:\\Users\\antonio\\Desktop\\workspace\\cripto\\src\\main\\java\\resources\\files";
+        String pathName = "C:\\Users\\antonio\\Desktop\\workspace\\cripto\\src\\main\\java\\resources\\files\\kuailian";
 
         try (Stream<Path> paths = Files.walk(Paths.get(pathName))) {
             paths
@@ -60,14 +62,29 @@ public class CriptoService {
     }
 
     private void processFile(Path path) {
+        Workbook workbook = null;
         try {
-            FileInputStream file = new FileInputStream(path.toFile());
-            Workbook workbook = new HSSFWorkbook(file);
+            try {
+                workbook = new HSSFWorkbook(new FileInputStream(path.toFile()));
+            } catch (Exception e) {
+                workbook = new XSSFWorkbook(new FileInputStream(path.toFile()));
+            }
             Sheet sheet = workbook.getSheetAt(0);
 
             for (Row row : sheet) {
                 if (row.getRowNum() != 0) {
-                    String dateRow = row.getCell(0).getStringCellValue();
+                    String dateRow = "";
+                    try{
+                        if(CellType.STRING.equals(row.getCell(0).getCellType())){
+                            dateRow = row.getCell(0).getStringCellValue();
+                        }else{
+                            dateRow = new SimpleDateFormat("yyyy-MM-dd", Locale.ENGLISH).format(row.getCell(0).getDateCellValue());
+                        }
+                    }catch (Exception e){
+                        logger.error(path.getFileName().toString() + " : " + e.getMessage());
+                        continue;
+                    }
+
                     Double costDollarsRow = row.getCell(1).getNumericCellValue();
                     Double costEurosRow = Objects.nonNull(row.getCell(2)) ? row.getCell(2).getNumericCellValue() : null;
 
@@ -82,7 +99,15 @@ public class CriptoService {
             FileOutputStream outputStream = new FileOutputStream(editedFile);
             workbook.write(outputStream);
         } catch (Exception e) {
-            logger.error(e.getMessage());
+            logger.error(path.getFileName().toString() + " : " + e.getMessage());
+        } finally {
+            try {
+                if (Objects.nonNull(workbook)) {
+                    workbook.close();
+                }
+            } catch (IOException e) {
+                logger.error(e.getMessage());
+            }
         }
     }
 
@@ -98,13 +123,37 @@ public class CriptoService {
     }
 
     private String formatDate(String dateString) {
-        try {
-            Date date = new SimpleDateFormat("MMMM dd, yyyy", Locale.ENGLISH).parse(dateString);
-            return new SimpleDateFormat("yyyy-MM-dd", Locale.ENGLISH).format(date);
-        } catch (ParseException e) {
-            logger.error(e.getMessage());
+        Date date = null;
+        try{
+            date = new SimpleDateFormat("yyyy-MM-dd", Locale.ENGLISH).parse(dateString);
+        }catch (ParseException e){
+            try {
+                date = new SimpleDateFormat("MMMM dd, yyyy", Locale.ENGLISH).parse(dateString);
+            } catch (ParseException e0) {
+                try {
+                    date = new SimpleDateFormat("MMM. dd, yyyy", Locale.ENGLISH).parse(dateString);
+                } catch (ParseException e1) {
+                    try {
+                        date = new SimpleDateFormat("dd/MM/yyyy", Locale.ENGLISH).parse(dateString);
+                    } catch (ParseException e2) {
+                        try {
+                            date = new SimpleDateFormat("dd/MM/yy", Locale.ENGLISH).parse(dateString);
+                        } catch (ParseException e3) {
+                            try {
+                                date = new SimpleDateFormat("dd-MM-yy", Locale.ENGLISH).parse(dateString);
+                            } catch (ParseException e4) {
+                                try {
+                                    date = new SimpleDateFormat("dd-MM-yyyy", Locale.ENGLISH).parse(dateString);
+                                } catch (ParseException e5) {
+                                    logger.error(e5.getMessage());
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
-        return null;
 
+        return new SimpleDateFormat("yyyy-MM-dd", Locale.ENGLISH).format(date);
     }
 }
